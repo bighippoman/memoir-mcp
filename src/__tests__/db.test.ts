@@ -372,6 +372,461 @@ describe("MemoirDB", () => {
     });
   });
 
+  // ── Session edge cases ───────────────────────────────────────────────
+
+  describe("session edge cases", () => {
+    it("multiple projects don't interfere with each other", () => {
+      const idA = db.createSession("/project/a");
+      const idB = db.createSession("/project/b");
+
+      const openA = db.getOpenSession("/project/a");
+      const openB = db.getOpenSession("/project/b");
+
+      expect(openA).not.toBeNull();
+      expect(openB).not.toBeNull();
+      expect(openA!.id).toBe(idA);
+      expect(openB!.id).toBe(idB);
+      expect(openA!.project_path).toBe("/project/a");
+      expect(openB!.project_path).toBe("/project/b");
+    });
+
+    it("creating a session while another is open for the same project returns a new id", () => {
+      const id1 = db.createSession("/project/path");
+      const id2 = db.createSession("/project/path");
+
+      expect(id2).toBeGreaterThan(id1);
+      // getOpenSession returns the most recent open session
+      const open = db.getOpenSession("/project/path");
+      expect(open!.id).toBe(id2);
+    });
+
+    it("closeSession with a non-existent session ID does not throw", () => {
+      expect(() => db.closeSession(99999)).not.toThrow();
+    });
+
+    it("closeSession called twice on the same session does not throw", () => {
+      const id = db.createSession("/project/path");
+      db.closeSession(id, "first close");
+      expect(() => db.closeSession(id, "second close")).not.toThrow();
+
+      // The summary should be overwritten to the second call
+      const sessions = db.getRecentSessions("/project/path", 1);
+      expect(sessions[0].summary).toBe("second close");
+    });
+
+    it("getRecentSessions with count=0 returns empty array", () => {
+      db.createSession("/project/path");
+      const sessions = db.getRecentSessions("/project/path", 0);
+      expect(sessions).toEqual([]);
+    });
+
+    it("getRecentSessions with count larger than total sessions returns all sessions", () => {
+      db.createSession("/project/path");
+      db.createSession("/project/path");
+      const sessions = db.getRecentSessions("/project/path", 100);
+      expect(sessions.length).toBe(2);
+    });
+
+    it("session ordering is correct (most recent first)", () => {
+      const ids: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        const id = db.createSession("/project/path");
+        db.closeSession(id, `session ${i}`);
+        ids.push(id);
+      }
+
+      const sessions = db.getRecentSessions("/project/path", 5);
+      expect(sessions.length).toBe(5);
+      // Most recent first
+      for (let i = 0; i < sessions.length - 1; i++) {
+        expect(sessions[i].id).toBeGreaterThan(sessions[i + 1].id);
+      }
+      expect(sessions[0].id).toBe(ids[4]);
+      expect(sessions[4].id).toBe(ids[0]);
+    });
+
+    it("getOpenSession returns null for a project that never had sessions", () => {
+      expect(db.getOpenSession("/nonexistent/project")).toBeNull();
+    });
+
+    it("getRecentSessions returns empty for a project with no sessions", () => {
+      const sessions = db.getRecentSessions("/nonexistent/project", 10);
+      expect(sessions).toEqual([]);
+    });
+  });
+
+  // ── Entry edge cases ────────────────────────────────────────────────
+
+  describe("entry edge cases", () => {
+    let sessionId: number;
+
+    beforeEach(() => {
+      sessionId = db.createSession("/project/path");
+    });
+
+    it("addEntry with empty string content stores empty string", () => {
+      db.addEntry(sessionId, "attempt", "");
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].content).toBe("");
+    });
+
+    it("addEntry with exactly 500 chars content stores full content", () => {
+      const content = "a".repeat(500);
+      db.addEntry(sessionId, "attempt", content);
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].content.length).toBe(500);
+      expect(entries[0].content).toBe(content);
+    });
+
+    it("addEntry with exactly 501 chars content truncates to 500", () => {
+      const content = "a".repeat(501);
+      db.addEntry(sessionId, "attempt", content);
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].content.length).toBe(500);
+      expect(entries[0].content).toBe("a".repeat(500));
+    });
+
+    it("addEntry with exactly 300 char outcome stores full outcome", () => {
+      const outcome = "b".repeat(300);
+      db.addEntry(sessionId, "attempt", "test", outcome);
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].outcome!.length).toBe(300);
+      expect(entries[0].outcome).toBe(outcome);
+    });
+
+    it("addEntry with exactly 301 char outcome truncates to 300", () => {
+      const outcome = "b".repeat(301);
+      db.addEntry(sessionId, "attempt", "test", outcome);
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].outcome!.length).toBe(300);
+      expect(entries[0].outcome).toBe("b".repeat(300));
+    });
+
+    it("adding exactly 50 entries succeeds", () => {
+      for (let i = 0; i < 50; i++) {
+        db.addEntry(sessionId, "attempt", `Entry ${i}`);
+      }
+      expect(db.getEntryCount(sessionId)).toBe(50);
+    });
+
+    it("adding entry #51 throws an error", () => {
+      for (let i = 0; i < 50; i++) {
+        db.addEntry(sessionId, "attempt", `Entry ${i}`);
+      }
+      expect(() => db.addEntry(sessionId, "attempt", "Entry 50")).toThrow(
+        /maximum of 50 entries/
+      );
+    });
+
+    it("getEntries on a session with 0 entries returns empty array", () => {
+      const entries = db.getEntries(sessionId);
+      expect(entries).toEqual([]);
+    });
+
+    it("getEntries on a non-existent session ID returns empty array", () => {
+      const entries = db.getEntries(99999);
+      expect(entries).toEqual([]);
+    });
+
+    it("invalid entry type is rejected by the database CHECK constraint", () => {
+      expect(() => db.addEntry(sessionId, "invalid_type", "test")).toThrow();
+    });
+
+    it("all valid entry types are accepted", () => {
+      const id1 = db.addEntry(sessionId, "attempt", "test attempt");
+      const id2 = db.addEntry(sessionId, "blocker", "test blocker");
+      const id3 = db.addEntry(sessionId, "decision", "test decision");
+      expect(id1).toBeGreaterThan(0);
+      expect(id2).toBeGreaterThan(0);
+      expect(id3).toBeGreaterThan(0);
+    });
+
+    it("addEntry with undefined outcome stores null", () => {
+      db.addEntry(sessionId, "attempt", "test", undefined);
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].outcome).toBeNull();
+    });
+
+    it("getEntryCount on a non-existent session returns 0", () => {
+      expect(db.getEntryCount(99999)).toBe(0);
+    });
+
+    it("entries from different sessions do not mix", () => {
+      const s1 = db.createSession("/project/a");
+      const s2 = db.createSession("/project/b");
+
+      db.addEntry(s1, "attempt", "entry for A");
+      db.addEntry(s2, "attempt", "entry for B");
+
+      const entriesA = db.getEntries(s1);
+      const entriesB = db.getEntries(s2);
+
+      expect(entriesA.length).toBe(1);
+      expect(entriesB.length).toBe(1);
+      expect(entriesA[0].content).toBe("entry for A");
+      expect(entriesB[0].content).toBe("entry for B");
+    });
+  });
+
+  // ── Blocker edge cases ──────────────────────────────────────────────
+
+  describe("blocker edge cases", () => {
+    it("resolveBlocker on a non-blocker entry (attempt) does not change it", () => {
+      const sessionId = db.createSession("/project/path");
+      const entryId = db.addEntry(sessionId, "attempt", "Just an attempt");
+      db.resolveBlocker(entryId, "Trying to resolve an attempt");
+
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].resolved).toBe(0);
+      // outcome should remain null since resolveBlocker only updates type='blocker'
+      expect(entries[0].outcome).toBeNull();
+    });
+
+    it("resolveBlocker on a decision entry does not change it", () => {
+      const sessionId = db.createSession("/project/path");
+      const entryId = db.addEntry(sessionId, "decision", "A decision");
+      db.resolveBlocker(entryId, "Trying to resolve a decision");
+
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].resolved).toBe(0);
+      expect(entries[0].outcome).toBeNull();
+    });
+
+    it("resolveBlocker on already-resolved blocker overwrites the resolution", () => {
+      const sessionId = db.createSession("/project/path");
+      const entryId = db.addEntry(sessionId, "blocker", "Stuck");
+      db.resolveBlocker(entryId, "First fix");
+      db.resolveBlocker(entryId, "Better fix");
+
+      const entries = db.getEntries(sessionId);
+      expect(entries[0].resolved).toBe(1);
+      expect(entries[0].outcome).toBe("Better fix");
+    });
+
+    it("resolveBlocker with non-existent entry ID does not throw", () => {
+      expect(() => db.resolveBlocker(99999, "some fix")).not.toThrow();
+    });
+
+    it("getBlockers when there are no sessions at all returns empty array", () => {
+      const blockers = db.getBlockers("/project/path", false);
+      expect(blockers).toEqual([]);
+    });
+
+    it("getBlockers with multiple projects only returns blockers for specified project", () => {
+      const s1 = db.createSession("/project/a");
+      db.addEntry(s1, "blocker", "Blocker A1");
+      db.addEntry(s1, "blocker", "Blocker A2");
+
+      const s2 = db.createSession("/project/b");
+      db.addEntry(s2, "blocker", "Blocker B1");
+
+      const blockersA = db.getBlockers("/project/a", false);
+      const blockersB = db.getBlockers("/project/b", false);
+
+      expect(blockersA.length).toBe(2);
+      expect(blockersB.length).toBe(1);
+      expect(blockersA[0].content).toBe("Blocker A1");
+      expect(blockersA[1].content).toBe("Blocker A2");
+      expect(blockersB[0].content).toBe("Blocker B1");
+    });
+
+    it("getBlockers returns blockers ordered by id ASC", () => {
+      const s = db.createSession("/project/path");
+      db.addEntry(s, "blocker", "First blocker");
+      db.addEntry(s, "blocker", "Second blocker");
+      db.addEntry(s, "blocker", "Third blocker");
+
+      const blockers = db.getBlockers("/project/path", false);
+      expect(blockers.length).toBe(3);
+      expect(blockers[0].content).toBe("First blocker");
+      expect(blockers[1].content).toBe("Second blocker");
+      expect(blockers[2].content).toBe("Third blocker");
+      expect(blockers[0].id).toBeLessThan(blockers[1].id);
+      expect(blockers[1].id).toBeLessThan(blockers[2].id);
+    });
+
+    it("getBlockers resolved=true returns empty when none are resolved", () => {
+      const s = db.createSession("/project/path");
+      db.addEntry(s, "blocker", "Unresolved blocker");
+      const resolved = db.getBlockers("/project/path", true);
+      expect(resolved).toEqual([]);
+    });
+
+    it("getBlockers resolved=false returns empty when all are resolved", () => {
+      const s = db.createSession("/project/path");
+      const b = db.addEntry(s, "blocker", "Will be resolved");
+      db.resolveBlocker(b, "Fixed");
+      const unresolved = db.getBlockers("/project/path", false);
+      expect(unresolved).toEqual([]);
+    });
+  });
+
+  // ── Pruning edge cases ──────────────────────────────────────────────
+
+  describe("pruning edge cases", () => {
+    it("pruning deletes associated entries (not just sessions)", () => {
+      db.setConfig("max_sessions_per_project", "3");
+
+      const s1 = db.createSession("/project/path");
+      db.addEntry(s1, "attempt", "Old entry 1");
+      db.addEntry(s1, "blocker", "Old blocker 1");
+      db.closeSession(s1);
+
+      const s2 = db.createSession("/project/path");
+      db.addEntry(s2, "attempt", "Entry 2");
+      db.closeSession(s2);
+
+      const s3 = db.createSession("/project/path");
+      db.addEntry(s3, "attempt", "Entry 3");
+      db.closeSession(s3);
+
+      // Creating s4 triggers pruning — keeps s2, s3, s4 (3 most recent)
+      db.createSession("/project/path");
+
+      // Entries from s1 should be gone (cascade delete)
+      const entriesS1 = db.getEntries(s1);
+      expect(entriesS1).toEqual([]);
+
+      // Entries from s2 and s3 should still exist
+      const entriesS2 = db.getEntries(s2);
+      expect(entriesS2.length).toBeGreaterThan(0);
+      const entriesS3 = db.getEntries(s3);
+      expect(entriesS3.length).toBeGreaterThan(0);
+    });
+
+    it("pruning with exactly max sessions does not prune", () => {
+      db.setConfig("max_sessions_per_project", "3");
+
+      const ids: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const id = db.createSession("/project/path");
+        db.closeSession(id);
+        ids.push(id);
+      }
+
+      const sessions = db.getRecentSessions("/project/path", 100);
+      expect(sessions.length).toBe(3);
+    });
+
+    it("pruning with max+1 sessions prunes exactly 1", () => {
+      db.setConfig("max_sessions_per_project", "3");
+
+      const ids: number[] = [];
+      for (let i = 0; i < 3; i++) {
+        const id = db.createSession("/project/path");
+        db.closeSession(id);
+        ids.push(id);
+      }
+
+      // 4th session triggers pruning — should prune exactly 1 (the oldest)
+      db.createSession("/project/path");
+
+      const sessions = db.getRecentSessions("/project/path", 100);
+      expect(sessions.length).toBe(3);
+
+      // The oldest session should be pruned
+      const sessionIds = sessions.map((s) => s.id);
+      expect(sessionIds).not.toContain(ids[0]);
+      expect(sessionIds).toContain(ids[1]);
+      expect(sessionIds).toContain(ids[2]);
+    });
+
+    it("pruned session entries are actually gone from the database", () => {
+      db.setConfig("max_sessions_per_project", "1");
+
+      const s1 = db.createSession("/project/path");
+      const e1 = db.addEntry(s1, "blocker", "Old blocker");
+      db.closeSession(s1);
+
+      // This triggers pruning of s1
+      db.createSession("/project/path");
+
+      // The entry from s1 should be gone
+      const entries = db.getEntries(s1);
+      expect(entries).toEqual([]);
+
+      // The blocker should also be gone from getBlockers
+      const blockers = db.getBlockers("/project/path", false);
+      const oldBlocker = blockers.find((b) => b.id === e1);
+      expect(oldBlocker).toBeUndefined();
+    });
+  });
+
+  // ── Config edge cases ───────────────────────────────────────────────
+
+  describe("config edge cases", () => {
+    it("getConfig for non-existent key returns null", () => {
+      expect(db.getConfig("totally_nonexistent_key")).toBeNull();
+    });
+
+    it("setConfig overwrites existing value", () => {
+      db.setConfig("test_key", "value1");
+      expect(db.getConfig("test_key")).toBe("value1");
+      db.setConfig("test_key", "value2");
+      expect(db.getConfig("test_key")).toBe("value2");
+    });
+
+    it("max_sessions_per_project with value '1' works as extreme limit", () => {
+      db.setConfig("max_sessions_per_project", "1");
+
+      const s1 = db.createSession("/project/path");
+      db.closeSession(s1);
+
+      // Creating s2 should prune s1
+      const s2 = db.createSession("/project/path");
+
+      const sessions = db.getRecentSessions("/project/path", 100);
+      expect(sessions.length).toBe(1);
+      expect(sessions[0].id).toBe(s2);
+    });
+
+    it("setConfig with empty string value", () => {
+      db.setConfig("test_key", "");
+      expect(db.getConfig("test_key")).toBe("");
+    });
+
+    it("default max_sessions_per_project is not overwritten on re-open", () => {
+      db.setConfig("max_sessions_per_project", "50");
+      // Create a new instance with the same path
+      const db2 = new MemoirDB(dbPath);
+      expect(db2.getConfig("max_sessions_per_project")).toBe("50");
+      db2.close();
+    });
+  });
+
+  // ── discardIfEmpty edge cases ───────────────────────────────────────
+
+  describe("discardIfEmpty edge cases", () => {
+    it("discardIfEmpty on session with entries keeps it", () => {
+      const id = db.createSession("/project/path");
+      db.addEntry(id, "attempt", "Something");
+      db.discardIfEmpty(id);
+
+      const sessions = db.getRecentSessions("/project/path", 10);
+      expect(sessions.length).toBe(1);
+      expect(sessions[0].id).toBe(id);
+    });
+
+    it("discardIfEmpty on non-existent session does not crash", () => {
+      expect(() => db.discardIfEmpty(99999)).not.toThrow();
+    });
+
+    it("discardIfEmpty on already-discarded session does not crash", () => {
+      const id = db.createSession("/project/path");
+      db.discardIfEmpty(id); // deletes it
+      expect(() => db.discardIfEmpty(id)).not.toThrow(); // no-op
+    });
+
+    it("discardIfEmpty on a closed empty session still deletes it", () => {
+      const id = db.createSession("/project/path");
+      db.closeSession(id, "empty session summary");
+      db.discardIfEmpty(id);
+
+      const sessions = db.getRecentSessions("/project/path", 10);
+      expect(sessions.length).toBe(0);
+    });
+  });
+
   // ── Close ─────────────────────────────────────────────────────────────
 
   describe("close", () => {
