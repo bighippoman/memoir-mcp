@@ -1,6 +1,7 @@
 {
   "name": "memoir-mcp",
-  "version": "1.0.2",
+  "version": "1.0.3",
+  "mcpName": "io.github.bighippoman/memoir",
   "description": "MCP server for structured session journals — gives AI agents persistent memory across sessions",
   "type": "module",
   "main": "build/index.js",

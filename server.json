@@ -1,0 +1,50 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.bighippoman/memoir",
+  "description": "Structured session journals for AI agents. Persistent memory across sessions — no more repeating dead ends.",
+  "repository": {
+    "url": "https://github.com/bighippoman/memoir-mcp",
+    "source": "github"
+  },
+  "version": "1.0.3",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "memoir-mcp",
+      "version": "1.0.3",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "description": "Max characters for content fields",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "MEMOIR_MAX_CONTENT"
+        },
+        {
+          "description": "Max characters for outcome/resolution fields",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "MEMOIR_MAX_OUTCOME"
+        },
+        {
+          "description": "Max entries per session",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "MEMOIR_MAX_ENTRIES"
+        },
+        {
+          "description": "Max sessions per project (rolling)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "MEMOIR_MAX_SESSIONS"
+        }
+      ]
+    }
+  ]
+}
