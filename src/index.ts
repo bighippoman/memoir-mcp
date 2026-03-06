@@ -110,7 +110,77 @@ server.registerTool(
   }
 );
 
-// Read tools placeholder — next task
+// --- Read Tools ---
+
+server.registerTool(
+  "get_handoff",
+  {
+    title: "Get Handoff",
+    description: "Get a structured summary of the last session for this project. Use this at the start of a new session to understand what was previously attempted, what's blocked, and what decisions were made.",
+    inputSchema: {},
+  },
+  async () => {
+    const sessions = db.getRecentSessions(projectPath, 1);
+    const lastClosed = sessions.find(s => s.ended_at !== null) ?? sessions[0] ?? null;
+
+    if (!lastClosed) {
+      return { content: [{ type: "text" as const, text: "No previous session found for this project." }] };
+    }
+
+    const entries = db.getEntries(lastClosed.id);
+    const text = formatHandoff(lastClosed, entries);
+
+    const unresolvedBlockers = db.getBlockers(projectPath, false);
+    const blockerNote = unresolvedBlockers.length > 0
+      ? `\n\n${unresolvedBlockers.length} unresolved blocker(s) across all sessions — use get_blockers to see them.`
+      : "";
+
+    return { content: [{ type: "text" as const, text: text + blockerNote }] };
+  }
+);
+
+server.registerTool(
+  "get_history",
+  {
+    title: "Get History",
+    description: "Query past sessions for this project.",
+    inputSchema: {
+      sessions_back: z.number().int().min(1).max(20).optional().default(3).describe("How many sessions to return (default 3)"),
+    },
+  },
+  async ({ sessions_back }) => {
+    const sessions = db.getRecentSessions(projectPath, sessions_back);
+    const sessionsWithEntries = sessions.map(session => ({
+      session,
+      entries: db.getEntries(session.id),
+    }));
+    const text = formatHistory(sessionsWithEntries);
+    return { content: [{ type: "text" as const, text }] };
+  }
+);
+
+server.registerTool(
+  "get_blockers",
+  {
+    title: "Get Blockers",
+    description: "List blockers across all sessions for this project.",
+    inputSchema: {
+      resolved: z.boolean().optional().default(false).describe("Show resolved blockers instead of unresolved (default: false)"),
+    },
+  },
+  async ({ resolved }) => {
+    const blockers = db.getBlockers(projectPath, resolved);
+    if (blockers.length === 0) {
+      return { content: [{ type: "text" as const, text: resolved ? "No resolved blockers." : "No unresolved blockers." }] };
+    }
+    const lines = blockers.map(b => {
+      const status = b.resolved ? "resolved" : "unresolved";
+      const resolution = b.resolved && b.outcome ? ` → ${b.outcome}` : "";
+      return `- [#${b.id}] (${status}) ${b.content}${resolution}`;
+    });
+    return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+  }
+);
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
