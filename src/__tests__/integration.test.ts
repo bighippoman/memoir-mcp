@@ -413,3 +413,186 @@ describe("integration: full session lifecycle", () => {
     expect(sessions[0].summary).toBe("full session");
   });
 });
+
+describe("integration: custom options (simulating env var overrides)", () => {
+  let dbPath: string;
+  const project = "/test/custom-app";
+
+  afterEach(() => {
+    try { fs.unlinkSync(dbPath); } catch {}
+  });
+
+  it("full workflow with tight content limits", () => {
+    dbPath = tmpDbPath();
+    const db = new MemoirDB(dbPath, { maxContentLength: 20, maxOutcomeLength: 15 });
+
+    const s = db.createSession(project);
+    db.addEntry(s, "attempt", "This is a very long attempt description that exceeds the limit", "This outcome is also way too long for the limit");
+    db.addEntry(s, "blocker", "Another long blocker description that should be truncated");
+    db.addEntry(s, "decision", "Short enough");
+    db.closeSession(s, "test tight limits");
+
+    const entries = db.getEntries(s);
+    expect(entries[0].content).toBe("This is a very long ");
+    expect(entries[0].content.length).toBe(20);
+    expect(entries[0].outcome).toBe("This outcome is");
+    expect(entries[0].outcome!.length).toBe(15);
+    expect(entries[1].content).toBe("Another long blocker");
+    expect(entries[1].content.length).toBe(20);
+    expect(entries[2].content).toBe("Short enough");
+    expect(entries[2].content.length).toBe(12); // under limit, not padded
+
+    // Handoff still works with truncated content
+    const sessions = db.getRecentSessions(project, 1);
+    const handoff = formatHandoff(sessions[0], entries);
+    expect(handoff).toContain("3 entries");
+    expect(handoff).toContain("This is a very long ");
+
+    db.close();
+  });
+
+  it("full workflow with tight entry limit", () => {
+    dbPath = tmpDbPath();
+    const db = new MemoirDB(dbPath, { maxEntriesPerSession: 3 });
+
+    const s = db.createSession(project);
+    db.addEntry(s, "attempt", "Entry 1");
+    db.addEntry(s, "blocker", "Entry 2");
+    db.addEntry(s, "decision", "Entry 3");
+
+    // 4th entry should fail
+    expect(() => db.addEntry(s, "attempt", "Entry 4")).toThrow(/maximum of 3/);
+
+    // Session still works
+    db.closeSession(s, "tight entry limit");
+    const sessions = db.getRecentSessions(project, 1);
+    expect(sessions[0].summary).toBe("tight entry limit");
+    expect(db.getEntries(s).length).toBe(3);
+
+    db.close();
+  });
+
+  it("full workflow with tight session limit and pruning", () => {
+    dbPath = tmpDbPath();
+    const db = new MemoirDB(dbPath, { maxSessionsPerProject: 2 });
+
+    // Session 1
+    const s1 = db.createSession(project);
+    db.addEntry(s1, "attempt", "work 1", "done");
+    db.addEntry(s1, "blocker", "stuck on auth");
+    db.closeSession(s1, "session 1");
+
+    // Session 2
+    const s2 = db.createSession(project);
+    db.addEntry(s2, "attempt", "work 2", "done");
+    db.closeSession(s2, "session 2");
+
+    // Session 3 — triggers pruning, s1 should be gone
+    const s3 = db.createSession(project);
+    db.addEntry(s3, "decision", "new architecture");
+
+    const sessions = db.getRecentSessions(project, 100);
+    expect(sessions.length).toBe(2);
+
+    // s1 entries should be cascade-deleted
+    expect(db.getEntries(s1)).toEqual([]);
+    // s1's blocker should be gone
+    const blockers = db.getBlockers(project, false);
+    expect(blockers.length).toBe(0);
+
+    // s2 and s3 entries should still exist
+    expect(db.getEntries(s2).length).toBe(1);
+    expect(db.getEntries(s3).length).toBe(1);
+
+    db.close();
+  });
+
+  it("large custom limits work correctly", () => {
+    dbPath = tmpDbPath();
+    const db = new MemoirDB(dbPath, {
+      maxContentLength: 5000,
+      maxOutcomeLength: 3000,
+      maxEntriesPerSession: 200,
+    });
+
+    const s = db.createSession(project);
+
+    // Content at 2000 chars — well above default 500, but under custom 5000
+    const longContent = "a".repeat(2000);
+    db.addEntry(s, "attempt", longContent, "b".repeat(1500));
+    const entries = db.getEntries(s);
+    expect(entries[0].content.length).toBe(2000);
+    expect(entries[0].outcome!.length).toBe(1500);
+
+    // Add 100 entries — above default 50 limit
+    for (let i = 1; i < 100; i++) {
+      db.addEntry(s, "attempt", `Entry ${i}`);
+    }
+    expect(db.getEntryCount(s)).toBe(100);
+
+    db.close();
+  });
+
+  it("handoff and history formatting work with custom-limited content", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T14:00:00Z"));
+
+    dbPath = tmpDbPath();
+    const db = new MemoirDB(dbPath, { maxContentLength: 30, maxOutcomeLength: 20 });
+
+    const s = db.createSession(project);
+    db.addEntry(s, "attempt", "This will be truncated at thirty characters exactly yes", "Outcome also truncated here");
+    db.addEntry(s, "blocker", "A blocker that gets cut off at the limit too");
+    db.closeSession(s, "truncated session");
+
+    const sessions = db.getRecentSessions(project, 1);
+    const entries = db.getEntries(sessions[0].id);
+
+    // Verify truncation happened
+    expect(entries[0].content.length).toBe(30);
+    expect(entries[0].outcome!.length).toBe(20);
+    expect(entries[1].content.length).toBe(30);
+
+    // Formatting should work with truncated data
+    const handoff = formatHandoff(sessions[0], entries);
+    expect(handoff).toContain("2 entries");
+    expect(handoff).toContain("Summary: truncated session");
+
+    const history = formatHistory([{ session: sessions[0], entries }]);
+    expect(history).toContain("Session 1");
+
+    vi.useRealTimers();
+    db.close();
+  });
+
+  it("blocker resolution works across sessions with custom limits", () => {
+    dbPath = tmpDbPath();
+    const db = new MemoirDB(dbPath, {
+      maxContentLength: 50,
+      maxOutcomeLength: 40,
+      maxSessionsPerProject: 5,
+    });
+
+    // Session 1: log a blocker
+    const s1 = db.createSession(project);
+    const blockerId = db.addEntry(s1, "blocker", "API rate limiting blocks batch processing workflow");
+    db.closeSession(s1);
+
+    // Blocker content should be truncated to 50
+    const blockers = db.getBlockers(project, false);
+    expect(blockers.length).toBe(1);
+    expect(blockers[0].content.length).toBe(50);
+
+    // Session 2: resolve with a long resolution string
+    const s2 = db.createSession(project);
+    db.resolveBlocker(blockerId, "Implemented exponential backoff with jitter and reduced batch size to stay under limits");
+    db.closeSession(s2);
+
+    // Resolution should be stored as-is (resolveBlocker doesn't truncate — addEntry does)
+    const resolved = db.getBlockers(project, true);
+    expect(resolved.length).toBe(1);
+    expect(resolved[0].outcome).toContain("Implemented exponential backoff");
+
+    db.close();
+  });
+});

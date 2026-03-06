@@ -832,6 +832,218 @@ describe("MemoirDB", () => {
     });
   });
 
+  // ── Custom options ──────────────────────────────────────────────────
+
+  describe("custom options", () => {
+    it("uses default values when no options are provided", () => {
+      expect(db.maxContentLength).toBe(500);
+      expect(db.maxOutcomeLength).toBe(300);
+      expect(db.maxEntriesPerSession).toBe(50);
+      expect(db.maxSessionsPerProject).toBe(20);
+    });
+
+    it("accepts custom maxContentLength", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom1.db"), { maxContentLength: 100 });
+      expect(customDb.maxContentLength).toBe(100);
+
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "x".repeat(200));
+      const entries = customDb.getEntries(s);
+      expect(entries[0].content.length).toBe(100);
+      customDb.close();
+    });
+
+    it("accepts custom maxOutcomeLength", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom2.db"), { maxOutcomeLength: 50 });
+      expect(customDb.maxOutcomeLength).toBe(50);
+
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "test", "y".repeat(100));
+      const entries = customDb.getEntries(s);
+      expect(entries[0].outcome!.length).toBe(50);
+      customDb.close();
+    });
+
+    it("accepts custom maxEntriesPerSession", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom3.db"), { maxEntriesPerSession: 5 });
+      expect(customDb.maxEntriesPerSession).toBe(5);
+
+      const s = customDb.createSession("/test");
+      for (let i = 0; i < 5; i++) {
+        customDb.addEntry(s, "attempt", `Entry ${i}`);
+      }
+      expect(customDb.getEntryCount(s)).toBe(5);
+      expect(() => customDb.addEntry(s, "attempt", "Too many")).toThrow(/maximum of 5 entries/);
+      customDb.close();
+    });
+
+    it("accepts custom maxSessionsPerProject", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom4.db"), { maxSessionsPerProject: 3 });
+      expect(customDb.maxSessionsPerProject).toBe(3);
+      expect(customDb.getConfig("max_sessions_per_project")).toBe("3");
+
+      // Create 4 sessions — should prune to 3
+      for (let i = 0; i < 3; i++) {
+        const id = customDb.createSession("/test");
+        customDb.closeSession(id);
+      }
+      customDb.createSession("/test");
+
+      const sessions = customDb.getRecentSessions("/test", 100);
+      expect(sessions.length).toBe(3);
+      customDb.close();
+    });
+
+    it("accepts all custom options at once", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom5.db"), {
+        maxContentLength: 50,
+        maxOutcomeLength: 25,
+        maxEntriesPerSession: 3,
+        maxSessionsPerProject: 2,
+      });
+
+      expect(customDb.maxContentLength).toBe(50);
+      expect(customDb.maxOutcomeLength).toBe(25);
+      expect(customDb.maxEntriesPerSession).toBe(3);
+      expect(customDb.maxSessionsPerProject).toBe(2);
+
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "a".repeat(100), "b".repeat(100));
+      const entries = customDb.getEntries(s);
+      expect(entries[0].content.length).toBe(50);
+      expect(entries[0].outcome!.length).toBe(25);
+      customDb.close();
+    });
+
+    it("accepts partial options — unset fields use defaults", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom6.db"), { maxContentLength: 200 });
+      expect(customDb.maxContentLength).toBe(200);
+      expect(customDb.maxOutcomeLength).toBe(300); // default
+      expect(customDb.maxEntriesPerSession).toBe(50); // default
+      expect(customDb.maxSessionsPerProject).toBe(20); // default
+      customDb.close();
+    });
+
+    it("custom maxContentLength allows longer content than default", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom7.db"), { maxContentLength: 1000 });
+      const s = customDb.createSession("/test");
+      const longContent = "z".repeat(800);
+      customDb.addEntry(s, "attempt", longContent);
+      const entries = customDb.getEntries(s);
+      // 800 chars would be truncated to 500 with default, but should be kept with custom 1000
+      expect(entries[0].content.length).toBe(800);
+      expect(entries[0].content).toBe(longContent);
+      customDb.close();
+    });
+
+    it("custom maxOutcomeLength allows longer outcomes than default", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom8.db"), { maxOutcomeLength: 600 });
+      const s = customDb.createSession("/test");
+      const longOutcome = "w".repeat(500);
+      customDb.addEntry(s, "attempt", "test", longOutcome);
+      const entries = customDb.getEntries(s);
+      // 500 chars would be truncated to 300 with default, but should be kept with custom 600
+      expect(entries[0].outcome!.length).toBe(500);
+      expect(entries[0].outcome).toBe(longOutcome);
+      customDb.close();
+    });
+
+    it("custom maxEntriesPerSession allows more entries than default", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom9.db"), { maxEntriesPerSession: 100 });
+      const s = customDb.createSession("/test");
+      // Add 75 entries — would fail with default limit of 50
+      for (let i = 0; i < 75; i++) {
+        customDb.addEntry(s, "attempt", `Entry ${i}`);
+      }
+      expect(customDb.getEntryCount(s)).toBe(75);
+      customDb.close();
+    });
+
+    it("custom maxEntriesPerSession with lower value restricts earlier", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom10.db"), { maxEntriesPerSession: 2 });
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "First");
+      customDb.addEntry(s, "attempt", "Second");
+      expect(() => customDb.addEntry(s, "attempt", "Third")).toThrow(/maximum of 2 entries/);
+      customDb.close();
+    });
+
+    it("custom maxContentLength truncates at exact boundary", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom11.db"), { maxContentLength: 10 });
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "1234567890abc");
+      const entries = customDb.getEntries(s);
+      expect(entries[0].content).toBe("1234567890");
+      expect(entries[0].content.length).toBe(10);
+      customDb.close();
+    });
+
+    it("custom maxOutcomeLength truncates at exact boundary", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom12.db"), { maxOutcomeLength: 8 });
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "test", "abcdefghijk");
+      const entries = customDb.getEntries(s);
+      expect(entries[0].outcome).toBe("abcdefgh");
+      expect(entries[0].outcome!.length).toBe(8);
+      customDb.close();
+    });
+
+    it("content exactly at custom limit is not truncated", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom13.db"), { maxContentLength: 10 });
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "1234567890");
+      const entries = customDb.getEntries(s);
+      expect(entries[0].content).toBe("1234567890");
+      customDb.close();
+    });
+
+    it("outcome exactly at custom limit is not truncated", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom14.db"), { maxOutcomeLength: 10 });
+      const s = customDb.createSession("/test");
+      customDb.addEntry(s, "attempt", "test", "1234567890");
+      const entries = customDb.getEntries(s);
+      expect(entries[0].outcome).toBe("1234567890");
+      customDb.close();
+    });
+
+    it("re-opening DB with different options applies new limits", () => {
+      // First instance with custom limits
+      const db1 = new MemoirDB(join(tmpDir, "reopen.db"), { maxSessionsPerProject: 5 });
+      expect(db1.getConfig("max_sessions_per_project")).toBe("5");
+      db1.close();
+
+      // Re-open with different limits
+      const db2 = new MemoirDB(join(tmpDir, "reopen.db"), { maxSessionsPerProject: 10 });
+      expect(db2.getConfig("max_sessions_per_project")).toBe("10");
+      expect(db2.maxSessionsPerProject).toBe(10);
+      db2.close();
+
+      // Re-open with no options — falls back to defaults
+      const db3 = new MemoirDB(join(tmpDir, "reopen.db"));
+      expect(db3.getConfig("max_sessions_per_project")).toBe("20");
+      expect(db3.maxSessionsPerProject).toBe(20);
+      db3.close();
+    });
+
+    it("custom maxSessionsPerProject=1 keeps only the latest session", () => {
+      const customDb = new MemoirDB(join(tmpDir, "custom15.db"), { maxSessionsPerProject: 1 });
+      const s1 = customDb.createSession("/test");
+      customDb.addEntry(s1, "attempt", "old work");
+      customDb.closeSession(s1);
+
+      const s2 = customDb.createSession("/test");
+      customDb.addEntry(s2, "attempt", "new work");
+
+      const sessions = customDb.getRecentSessions("/test", 100);
+      expect(sessions.length).toBe(1);
+      expect(sessions[0].id).toBe(s2);
+
+      // Old entries should be gone
+      expect(customDb.getEntries(s1)).toEqual([]);
+      customDb.close();
+    });
+  });
+
   // ── Close ─────────────────────────────────────────────────────────────
 
   describe("close", () => {
