@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   MemoirDB,
-  MAX_CONTENT_LENGTH,
-  MAX_OUTCOME_LENGTH,
-  MAX_ENTRIES_PER_SESSION,
+  DEFAULT_MAX_CONTENT_LENGTH,
+  DEFAULT_MAX_OUTCOME_LENGTH,
+  DEFAULT_MAX_ENTRIES_PER_SESSION,
 } from "../db.js";
 
 describe("MemoirDB", () => {
@@ -32,16 +32,16 @@ describe("MemoirDB", () => {
   // ── Constants ──────────────────────────────────────────────────────────
 
   describe("constants", () => {
-    it("exports MAX_CONTENT_LENGTH = 500", () => {
-      expect(MAX_CONTENT_LENGTH).toBe(500);
+    it("exports DEFAULT_MAX_CONTENT_LENGTH = 500", () => {
+      expect(DEFAULT_MAX_CONTENT_LENGTH).toBe(500);
     });
 
-    it("exports MAX_OUTCOME_LENGTH = 300", () => {
-      expect(MAX_OUTCOME_LENGTH).toBe(300);
+    it("exports DEFAULT_MAX_OUTCOME_LENGTH = 300", () => {
+      expect(DEFAULT_MAX_OUTCOME_LENGTH).toBe(300);
     });
 
-    it("exports MAX_ENTRIES_PER_SESSION = 50", () => {
-      expect(MAX_ENTRIES_PER_SESSION).toBe(50);
+    it("exports DEFAULT_MAX_ENTRIES_PER_SESSION = 50", () => {
+      expect(DEFAULT_MAX_ENTRIES_PER_SESSION).toBe(50);
     });
   });
 
@@ -281,24 +281,24 @@ describe("MemoirDB", () => {
       expect(db.getEntryCount(sessionId)).toBe(2);
     });
 
-    it("addEntry truncates content that exceeds MAX_CONTENT_LENGTH", () => {
+    it("addEntry truncates content that exceeds DEFAULT_MAX_CONTENT_LENGTH", () => {
       const longContent = "x".repeat(600);
       db.addEntry(sessionId, "attempt", longContent);
       const entries = db.getEntries(sessionId);
-      expect(entries[0].content.length).toBe(MAX_CONTENT_LENGTH);
-      expect(entries[0].content).toBe("x".repeat(MAX_CONTENT_LENGTH));
+      expect(entries[0].content.length).toBe(DEFAULT_MAX_CONTENT_LENGTH);
+      expect(entries[0].content).toBe("x".repeat(DEFAULT_MAX_CONTENT_LENGTH));
     });
 
-    it("addEntry truncates outcome that exceeds MAX_OUTCOME_LENGTH", () => {
+    it("addEntry truncates outcome that exceeds DEFAULT_MAX_OUTCOME_LENGTH", () => {
       const longOutcome = "y".repeat(400);
       db.addEntry(sessionId, "attempt", "content", longOutcome);
       const entries = db.getEntries(sessionId);
-      expect(entries[0].outcome!.length).toBe(MAX_OUTCOME_LENGTH);
-      expect(entries[0].outcome).toBe("y".repeat(MAX_OUTCOME_LENGTH));
+      expect(entries[0].outcome!.length).toBe(DEFAULT_MAX_OUTCOME_LENGTH);
+      expect(entries[0].outcome).toBe("y".repeat(DEFAULT_MAX_OUTCOME_LENGTH));
     });
 
     it("addEntry throws when max entries per session is exceeded", () => {
-      for (let i = 0; i < MAX_ENTRIES_PER_SESSION; i++) {
+      for (let i = 0; i < DEFAULT_MAX_ENTRIES_PER_SESSION; i++) {
         db.addEntry(sessionId, "attempt", `Entry ${i}`);
       }
       expect(() => {
@@ -306,11 +306,11 @@ describe("MemoirDB", () => {
       }).toThrow();
     });
 
-    it("addEntry allows exactly MAX_ENTRIES_PER_SESSION entries", () => {
-      for (let i = 0; i < MAX_ENTRIES_PER_SESSION; i++) {
+    it("addEntry allows exactly DEFAULT_MAX_ENTRIES_PER_SESSION entries", () => {
+      for (let i = 0; i < DEFAULT_MAX_ENTRIES_PER_SESSION; i++) {
         db.addEntry(sessionId, "attempt", `Entry ${i}`);
       }
-      expect(db.getEntryCount(sessionId)).toBe(MAX_ENTRIES_PER_SESSION);
+      expect(db.getEntryCount(sessionId)).toBe(DEFAULT_MAX_ENTRIES_PER_SESSION);
     });
   });
 
@@ -785,12 +785,17 @@ describe("MemoirDB", () => {
       expect(db.getConfig("test_key")).toBe("");
     });
 
-    it("default max_sessions_per_project is not overwritten on re-open", () => {
+    it("max_sessions_per_project respects constructor options on re-open", () => {
       db.setConfig("max_sessions_per_project", "50");
-      // Create a new instance with the same path
+      // Re-open without options — resets to default 20
       const db2 = new MemoirDB(dbPath);
-      expect(db2.getConfig("max_sessions_per_project")).toBe("50");
+      expect(db2.getConfig("max_sessions_per_project")).toBe("20");
       db2.close();
+
+      // Re-open with custom option — uses that value
+      const db3 = new MemoirDB(dbPath, { maxSessionsPerProject: 100 });
+      expect(db3.getConfig("max_sessions_per_project")).toBe("100");
+      db3.close();
     });
   });
 

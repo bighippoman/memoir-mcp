@@ -50,9 +50,24 @@ npx -y memoir-mcp
 
 Single SQLite file at `~/.memoir/memoir.db`. No API keys, no external services.
 
-## Token control
+## Configuration
 
-Content is capped at 500 characters, outcomes at 300 characters. Each session holds a maximum of 50 entries. Handoff output uses a compact format to keep context window usage low.
+All limits are configurable via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MEMOIR_MAX_CONTENT` | 500 | Max characters for content fields |
+| `MEMOIR_MAX_OUTCOME` | 300 | Max characters for outcome/resolution fields |
+| `MEMOIR_MAX_ENTRIES` | 50 | Max entries per session |
+| `MEMOIR_MAX_SESSIONS` | 20 | Max sessions per project (rolling) |
+
+Example with custom limits:
+
+```bash
+claude mcp add memoir -s user -e MEMOIR_MAX_CONTENT=1000 -e MEMOIR_MAX_ENTRIES=100 -- npx -y memoir-mcp
+```
+
+Handoff output uses a compact format to keep context window usage low.
 
 ## License
 

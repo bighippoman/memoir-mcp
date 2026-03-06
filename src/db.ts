@@ -2,11 +2,19 @@ import Database from "better-sqlite3";
 import { mkdirSync, unlinkSync } from "node:fs";
 import { dirname } from "node:path";
 
-// ── Constants ──────────────────────────────────────────────────────────────
+// ── Constants (defaults, overridable via constructor options) ──────────────
 
-export const MAX_CONTENT_LENGTH = 500;
-export const MAX_OUTCOME_LENGTH = 300;
-export const MAX_ENTRIES_PER_SESSION = 50;
+export const DEFAULT_MAX_CONTENT_LENGTH = 500;
+export const DEFAULT_MAX_OUTCOME_LENGTH = 300;
+export const DEFAULT_MAX_ENTRIES_PER_SESSION = 50;
+export const DEFAULT_MAX_SESSIONS_PER_PROJECT = 20;
+
+export interface MemoirDBOptions {
+  maxContentLength?: number;
+  maxOutcomeLength?: number;
+  maxEntriesPerSession?: number;
+  maxSessionsPerProject?: number;
+}
 
 // ── Interfaces ─────────────────────────────────────────────────────────────
 
@@ -32,8 +40,16 @@ export interface Entry {
 
 export class MemoirDB {
   private db: Database.Database;
+  readonly maxContentLength: number;
+  readonly maxOutcomeLength: number;
+  readonly maxEntriesPerSession: number;
+  readonly maxSessionsPerProject: number;
 
-  constructor(dbPath: string) {
+  constructor(dbPath: string, options: MemoirDBOptions = {}) {
+    this.maxContentLength = options.maxContentLength ?? DEFAULT_MAX_CONTENT_LENGTH;
+    this.maxOutcomeLength = options.maxOutcomeLength ?? DEFAULT_MAX_OUTCOME_LENGTH;
+    this.maxEntriesPerSession = options.maxEntriesPerSession ?? DEFAULT_MAX_ENTRIES_PER_SESSION;
+    this.maxSessionsPerProject = options.maxSessionsPerProject ?? DEFAULT_MAX_SESSIONS_PER_PROJECT;
     // Create parent directory if needed
     mkdirSync(dirname(dbPath), { recursive: true });
 
@@ -86,12 +102,12 @@ export class MemoirDB {
       CREATE INDEX IF NOT EXISTS idx_entries_type ON entries(type);
     `);
 
-    // Set default config
+    // Set default config (or update if options override)
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO config (key, value) VALUES ('max_sessions_per_project', '20')`
+        "INSERT INTO config (key, value) VALUES ('max_sessions_per_project', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
       )
-      .run();
+      .run(String(this.maxSessionsPerProject));
   }
 
   // ── Config ─────────────────────────────────────────────────────────────
@@ -201,16 +217,16 @@ export class MemoirDB {
   ): number {
     // Check max entries limit
     const currentCount = this.getEntryCount(sessionId);
-    if (currentCount >= MAX_ENTRIES_PER_SESSION) {
+    if (currentCount >= this.maxEntriesPerSession) {
       throw new Error(
-        `Session ${sessionId} has reached the maximum of ${MAX_ENTRIES_PER_SESSION} entries`
+        `Session ${sessionId} has reached the maximum of ${this.maxEntriesPerSession} entries`
       );
     }
 
     // Truncate content and outcome if needed
-    const truncatedContent = content.slice(0, MAX_CONTENT_LENGTH);
+    const truncatedContent = content.slice(0, this.maxContentLength);
     const truncatedOutcome =
-      outcome != null ? outcome.slice(0, MAX_OUTCOME_LENGTH) : null;
+      outcome != null ? outcome.slice(0, this.maxOutcomeLength) : null;
 
     const result = this.db
       .prepare(

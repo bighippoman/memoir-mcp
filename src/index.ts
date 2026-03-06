@@ -8,8 +8,20 @@ import { formatHandoff, formatHistory } from "./format.js";
 import path from "path";
 import os from "os";
 
+function envInt(name: string): number | undefined {
+  const val = process.env[name];
+  if (val === undefined) return undefined;
+  const n = parseInt(val, 10);
+  return Number.isNaN(n) ? undefined : n;
+}
+
 const DB_PATH = path.join(os.homedir(), ".memoir", "memoir.db");
-const db = new MemoirDB(DB_PATH);
+const db = new MemoirDB(DB_PATH, {
+  maxContentLength: envInt("MEMOIR_MAX_CONTENT"),
+  maxOutcomeLength: envInt("MEMOIR_MAX_OUTCOME"),
+  maxEntriesPerSession: envInt("MEMOIR_MAX_ENTRIES"),
+  maxSessionsPerProject: envInt("MEMOIR_MAX_SESSIONS"),
+});
 const projectPath = detectProject(process.cwd());
 
 function getOrCreateSession(): number {
@@ -31,8 +43,8 @@ server.registerTool(
     title: "Log Attempt",
     description: "Record something that was tried and its outcome.",
     inputSchema: {
-      content: z.string().max(500).describe("What was attempted"),
-      outcome: z.string().max(300).optional().describe("What happened"),
+      content: z.string().max(db.maxContentLength).describe("What was attempted"),
+      outcome: z.string().max(db.maxOutcomeLength).optional().describe("What happened"),
     },
   },
   async ({ content, outcome }) => {
@@ -48,7 +60,7 @@ server.registerTool(
     title: "Log Blocker",
     description: "Flag something that's stuck and why.",
     inputSchema: {
-      content: z.string().max(500).describe("What's blocked and why"),
+      content: z.string().max(db.maxContentLength).describe("What's blocked and why"),
     },
   },
   async ({ content }) => {
@@ -65,7 +77,7 @@ server.registerTool(
     description: "Mark a blocker as resolved.",
     inputSchema: {
       blocker_id: z.number().int().describe("ID of the blocker entry"),
-      resolution: z.string().max(300).describe("What fixed it"),
+      resolution: z.string().max(db.maxOutcomeLength).describe("What fixed it"),
     },
   },
   async ({ blocker_id, resolution }) => {
@@ -80,7 +92,7 @@ server.registerTool(
     title: "Log Decision",
     description: "Record a design or architecture choice and its rationale.",
     inputSchema: {
-      content: z.string().max(500).describe("What was decided and why"),
+      content: z.string().max(db.maxContentLength).describe("What was decided and why"),
     },
   },
   async ({ content }) => {
@@ -96,7 +108,7 @@ server.registerTool(
     title: "End Session",
     description: "Explicitly close the current session with an optional summary.",
     inputSchema: {
-      summary: z.string().max(500).optional().describe("High-level session summary"),
+      summary: z.string().max(db.maxContentLength).optional().describe("High-level session summary"),
     },
   },
   async ({ summary }) => {

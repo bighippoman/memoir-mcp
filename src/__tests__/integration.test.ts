@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MemoirDB, MAX_ENTRIES_PER_SESSION } from "../db.js";
+import { MemoirDB, DEFAULT_MAX_ENTRIES_PER_SESSION } from "../db.js";
 import { detectProject } from "../project.js";
 import { formatHandoff, formatHistory, formatEntry } from "../format.js";
 import fs from "fs";
@@ -79,7 +79,7 @@ describe("integration: full session lifecycle", () => {
     vi.setSystemTime(new Date("2026-03-06T14:00:00Z"));
 
     const s1 = db.createSession(project);
-    for (let i = 0; i < MAX_ENTRIES_PER_SESSION; i++) {
+    for (let i = 0; i < DEFAULT_MAX_ENTRIES_PER_SESSION; i++) {
       const types = ["attempt", "blocker", "decision"] as const;
       const type = types[i % 3];
       db.addEntry(s1, type, `Entry ${i}`, type === "attempt" ? `Outcome ${i}` : undefined);
