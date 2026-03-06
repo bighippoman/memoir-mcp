@@ -6,6 +6,10 @@ When a session ends, all reasoning is lost -- what was tried, what failed, what'
 
 Works with any MCP client: Claude Code, Cursor, Codex, Windsurf, and more.
 
+<a href="https://glama.ai/mcp/servers/@bighippoman/memoir-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/@bighippoman/memoir-mcp/badge" alt="memoir-mcp MCP server" />
+</a>
+
 ## Install
 
 ### Claude Code
